@@ -1,0 +1,38 @@
+{
+  "name": "bb-plugin-plan-pane",
+  "version": "0.1.0",
+  "description": "Open an agent's proposed plan in a split pane the moment it is ready for review.",
+  "type": "module",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/dillionverma/bb-plugin-plan-pane.git"
+  },
+  "engines": {
+    "bb": ">=0.43",
+    "bbPluginSdk": ">=0.4.87"
+  },
+  "scripts": {
+    "build": "bb plugin build",
+    "typecheck": "tsc -p tsconfig.json"
+  },
+  "bb": {
+    "name": "Plan Pane",
+    "description": "Open an agent's proposed plan in a split pane the moment it is ready for review.",
+    "branding": {
+      "icon": "ListTodo"
+    },
+    "server": "./server.ts",
+    "skills": [
+      "skills"
+    ]
+  },
+  "dependencies": {
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@get-bb/plugin-sdk": "0.4.87",
+    "@types/node": "^22.0.0",
+    "typescript": "^5.7.0"
+  }
+}
