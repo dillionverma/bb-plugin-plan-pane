@@ -25,7 +25,16 @@ export const rpcContract = defineRpcContract({
   /** Is there a plan to show for this thread, and where would it come from? */
   plan_status: {
     input: z.object({ threadId: z.string().min(1) }),
-    output: z.object({ source: planSourceSchema, fileName: z.string(), shortcut: z.string() }),
+    output: z.object({
+      source: planSourceSchema,
+      fileName: z.string(),
+      shortcuts: z.object({ panel: z.string(), splitRight: z.string(), splitDown: z.string() }),
+    }),
+  },
+  /** Resolve the plan, write plan.md, and open it in a new pane (bb's split open, every window). */
+  plan_split: {
+    input: z.object({ threadId: z.string().min(1), split: z.enum(SPLIT_OPTIONS) }),
+    output: z.object({ source: planSourceSchema, fileName: z.string(), delivered: z.number() }),
   },
   /** Resolve the plan, write plan.md into thread storage, and return where it is. */
   plan_prepare: {
@@ -111,13 +120,33 @@ export default async function plugin(bb: BbPluginApi) {
     },
     shortcut: {
       type: "string",
-      label: "Keyboard shortcut for the header button (e.g. mod+shift+l; blank disables)",
+      label: "Shortcut: open plan in this thread's panel (blank disables)",
       experimental_schema: z
         .string()
         .trim()
         .max(40)
         .regex(/^$|^((mod|ctrl|control|alt|shift|meta|cmd)\+)*[a-z0-9,.;'/\\\[\]`-]$/i, "Use modifiers plus one key, like mod+shift+l"),
       default: "mod+shift+l",
+    },
+    splitRightShortcut: {
+      type: "string",
+      label: "Shortcut: open plan in a pane to the right (iTerm/Ghostty style; blank disables)",
+      experimental_schema: z
+        .string()
+        .trim()
+        .max(40)
+        .regex(/^$|^((mod|ctrl|control|alt|shift|meta|cmd)\+)*[a-z0-9,.;'/\\\[\]`-]$/i, "Use modifiers plus one key, like mod+d"),
+      default: "mod+d",
+    },
+    splitDownShortcut: {
+      type: "string",
+      label: "Shortcut: open plan in a pane below (blank disables)",
+      experimental_schema: z
+        .string()
+        .trim()
+        .max(40)
+        .regex(/^$|^((mod|ctrl|control|alt|shift|meta|cmd)\+)*[a-z0-9,.;'/\\\[\]`-]$/i, "Use modifiers plus one key, like mod+shift+d"),
+      default: "mod+shift+d",
     },
     fileName: {
       type: "string",
@@ -266,11 +295,26 @@ export default async function plugin(bb: BbPluginApi) {
 
   bb.rpc.register(rpcContract, {
     async plan_status({ threadId }) {
-      const { fileName, shortcut } = await settings.get();
+      const { fileName, shortcut, splitRightShortcut, splitDownShortcut } = await settings.get();
+      const shortcuts = { panel: shortcut, splitRight: splitRightShortcut, splitDown: splitDownShortcut };
       const resolved = await resolvePlan(threadId);
-      if (resolved) return { source: resolved.source, fileName, shortcut };
+      if (resolved) return { source: resolved.source, fileName, shortcuts };
       const source: PlanSource = (await savedPlanExists(threadId, fileName)) ? "saved" : null;
-      return { source, fileName, shortcut };
+      return { source, fileName, shortcuts };
+    },
+    async plan_split({ threadId, split }) {
+      const { fileName } = await settings.get();
+      const resolved = await resolvePlan(threadId);
+      let source: PlanSource = null;
+      if (resolved) {
+        await writePlanFile(threadId, resolved.plan, fileName);
+        source = resolved.source;
+      } else if (await savedPlanExists(threadId, fileName)) {
+        source = "saved";
+      }
+      if (!source) return { source, fileName, delivered: 0 };
+      const delivered = await openSplit(threadId, fileName, split);
+      return { source, fileName, delivered };
     },
     async plan_prepare({ threadId }) {
       const { fileName } = await settings.get();

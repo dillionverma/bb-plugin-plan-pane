@@ -18,15 +18,25 @@ Two signals are covered:
 
 ## Opening a plan on demand (current window only)
 
-- **Header button**: a "Plan" button sits in the thread header action row. A
-  dot on it means a plan exists (pending approval, recent `/plan` turn, or a
-  saved `plan.md`). Clicking opens `plan.md` in this window's panel only.
-- **Command palette**: `Mod+K` (or `Mod+Shift+P`), then "Plan Pane: open plan
-  for this thread".
-- **Keyboard shortcut**: `Mod+Shift+L` by default while viewing a thread.
-  Change it with the `shortcut` setting (for example `mod+shift+.`); leave it
-  blank to disable. bb's own shortcut table is fixed, so this binding is
-  plugin-owned and does not appear under Settings → Keyboard.
+- **Header buttons**: "Plan" plus two split icons sit in the thread header
+  action row. A dot on "Plan" means a plan exists (pending approval, recent
+  `/plan` turn, or a saved `plan.md`).
+  - "Plan" opens `plan.md` in this window's panel only.
+  - Split-right and split-below open it in a new pane. These use bb's split
+    open, which reaches every connected bb window.
+- **Command palette**: `Mod+K`, then "Plan Pane: …" (panel, pane right, pane
+  below).
+- **Keyboard shortcuts** (iTerm/Ghostty style, while viewing a thread):
+  - `Mod+D` pane to the right (`splitRightShortcut`)
+  - `Mod+Shift+D` pane below (`splitDownShortcut`)
+  - `Mod+Shift+L` this thread's panel (`shortcut`)
+  Blank a setting to disable it. bb's own shortcut table is fixed, so these
+  bindings are plugin-owned and do not appear under Settings → Keyboard.
+  Because bb binds `Mod+D` to the diff toggle by default, move that first:
+  `bb settings keyboard set diff.toggle mod+shift+g`. To make `Mod+W` close
+  the active pane instead of a panel tab:
+  `bb settings keyboard set pane.close mod+w` and
+  `bb settings keyboard set panel.close mod+shift+w`.
 
 ## Commands
 
@@ -51,6 +61,6 @@ Edit under Settings → Installed plugins → Plan Pane, or with
 - `split` (`right` | `down` | `left` | `top` | `replace`, default `right`) —
   pane placement for `split` mode and `bb plan-pane open`. `down` gives a
   horizontal split.
-- `shortcut` (default `mod+shift+l`) — chord for the header button; blank
-  disables it.
+- `shortcut` (default `mod+shift+l`), `splitRightShortcut` (default `mod+d`),
+  `splitDownShortcut` (default `mod+shift+d`) — chords; blank disables.
 - `fileName` (default `plan.md`) — file name inside thread storage.
