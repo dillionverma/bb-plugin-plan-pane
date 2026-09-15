@@ -31,6 +31,17 @@ npm install
 bb plugin install .
 ```
 
+## Open it yourself
+
+Three ways to open a thread's plan in the window you are looking at (never
+other windows):
+
+| Surface | How |
+| ------- | --- |
+| Thread header | Click the **Plan** button. A dot means a plan exists. |
+| Command palette | `Mod+K`, then "Plan Pane: open plan for this thread". |
+| Keyboard | `Mod+Shift+L` while viewing the thread (configurable, see `shortcut`). |
+
 ## Settings
 
 | Key        | Default | Meaning                                                        |
@@ -39,6 +50,7 @@ bb plugin install .
 | `mode`     | `tab`   | `tab` pins into the thread's panel; `split` splits every window. |
 | `textPlans`| `true`  | Also open plans that arrive as plain text (no approval).       |
 | `split`    | `right` | Placement for split mode and the CLI: `right`, `down`, `left`, `top`, `replace`. |
+| `shortcut` | `mod+shift+l` | Chord for the header button; blank disables it.          |
 | `fileName` | `plan.md` | File name written inside thread storage.                     |
 
 ```sh

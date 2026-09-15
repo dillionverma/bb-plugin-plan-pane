@@ -4,7 +4,7 @@
 // when an agent asks the user to approve a plan. This plugin listens for
 // that event, writes the plan markdown into the thread's storage, and opens
 // it in a split pane next to the chat so the plan is easy to read and review.
-import type { BbPluginApi } from "@get-bb/plugin-sdk";
+import { defineRpcContract, type BbPluginApi } from "@get-bb/plugin-sdk";
 import { z } from "zod";
 
 const SPLIT_OPTIONS = ["right", "down", "left", "top", "replace"] as const;
@@ -14,6 +14,25 @@ const MODE_OPTIONS = ["tab", "split"] as const;
 type Mode = (typeof MODE_OPTIONS)[number];
 
 const PLAN_FILE_NAME = "plan.md";
+
+/** Realtime channel the header button listens on; payload is `{ threadId }`. */
+const PLAN_CHANGED = "plan-changed";
+
+const planSourceSchema = z.enum(["pending", "text", "saved"]).nullable();
+export type PlanSource = z.infer<typeof planSourceSchema>;
+
+export const rpcContract = defineRpcContract({
+  /** Is there a plan to show for this thread, and where would it come from? */
+  plan_status: {
+    input: z.object({ threadId: z.string().min(1) }),
+    output: z.object({ source: planSourceSchema, fileName: z.string(), shortcut: z.string() }),
+  },
+  /** Resolve the plan, write plan.md into thread storage, and return where it is. */
+  plan_prepare: {
+    input: z.object({ threadId: z.string().min(1) }),
+    output: z.object({ source: planSourceSchema, fileName: z.string() }),
+  },
+});
 
 /** Narrow a pending interaction down to a plan-approval request. */
 function planFromInteraction(interaction: unknown): string | null {
@@ -89,6 +108,16 @@ export default async function plugin(bb: BbPluginApi) {
       label: "Pane placement (split mode and `bb plan-pane open`)",
       options: [...SPLIT_OPTIONS],
       default: "right",
+    },
+    shortcut: {
+      type: "string",
+      label: "Keyboard shortcut for the header button (e.g. mod+shift+l; blank disables)",
+      experimental_schema: z
+        .string()
+        .trim()
+        .max(40)
+        .regex(/^$|^((mod|ctrl|control|alt|shift|meta|cmd)\+)*[a-z0-9,.;'/\\\[\]`-]$/i, "Use modifiers plus one key, like mod+shift+l"),
+      default: "mod+shift+l",
     },
     fileName: {
       type: "string",
@@ -193,10 +222,66 @@ export default async function plugin(bb: BbPluginApi) {
 
     try {
       const { path, detail } = await openPlan(thread.id, plan, { environmentId: thread.environmentId });
+      bb.realtime.publish(PLAN_CHANGED, { threadId: thread.id });
       bb.log.info(`opened plan for ${thread.id} at ${path} (${detail})`);
     } catch (error) {
       bb.log.error(`failed to open plan for ${thread.id}: ${error instanceof Error ? error.message : String(error)}`);
     }
+  });
+
+  /**
+   * Find the best plan for a thread: a pending approval, else the final
+   * message of the latest /plan turn, else nothing (a saved plan.md may still
+   * exist on disk; callers check that separately).
+   */
+  async function resolvePlan(threadId: string): Promise<{ source: "pending" | "text"; plan: string } | null> {
+    const pending = await bb.sdk.threads.interactions.list({ threadId });
+    const planInteraction = [...pending].reverse().find((interaction) => planFromInteraction(interaction) !== null);
+    const pendingPlan = planInteraction ? planFromInteraction(planInteraction) : null;
+    if (pendingPlan) return { source: "pending", plan: pendingPlan };
+
+    const [turn] = await bb.sdk.threads.events.list({
+      threadId,
+      order: "desc",
+      limit: "1",
+      types: ["client/turn/requested"],
+    });
+    if (turn && isPlanModeTurnRequest(turn.data)) {
+      const { output } = await bb.sdk.threads.output({ threadId });
+      if (output && output.trim().length > 0) return { source: "text", plan: output };
+    }
+    return null;
+  }
+
+  async function savedPlanExists(threadId: string, fileName: string): Promise<boolean> {
+    const location = await bb.sdk.threads.storageLocation({ threadId });
+    const absolutePath = `${location.storageRootPath.replace(/\/+$/, "")}/${fileName}`;
+    try {
+      await bb.sdk.files.read({ hostId: location.hostId, path: absolutePath });
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  bb.rpc.register(rpcContract, {
+    async plan_status({ threadId }) {
+      const { fileName, shortcut } = await settings.get();
+      const resolved = await resolvePlan(threadId);
+      if (resolved) return { source: resolved.source, fileName, shortcut };
+      const source: PlanSource = (await savedPlanExists(threadId, fileName)) ? "saved" : null;
+      return { source, fileName, shortcut };
+    },
+    async plan_prepare({ threadId }) {
+      const { fileName } = await settings.get();
+      const resolved = await resolvePlan(threadId);
+      if (resolved) {
+        await writePlanFile(threadId, resolved.plan, fileName);
+        return { source: resolved.source, fileName };
+      }
+      const source: PlanSource = (await savedPlanExists(threadId, fileName)) ? "saved" : null;
+      return { source, fileName };
+    },
   });
 
   // Providers without a native plan approval (Codex today) answer a /plan
@@ -236,6 +321,7 @@ export default async function plugin(bb: BbPluginApi) {
       if (handledTextTurns.size > 500) handledTextTurns.delete(handledTextTurns.values().next().value as string);
 
       const { path, detail } = await openPlan(thread.id, text, { environmentId: thread.environmentId });
+      bb.realtime.publish(PLAN_CHANGED, { threadId: thread.id });
       bb.log.info(`opened text plan for ${thread.id} at ${path} (${detail})`);
     } catch (error) {
       bb.log.error(`failed to open text plan for ${thread.id}: ${error instanceof Error ? error.message : String(error)}`);
@@ -271,24 +357,8 @@ export default async function plugin(bb: BbPluginApi) {
       if (!threadId) {
         return { exitCode: 1, stderr: "Pass a thread ID or run inside a BB thread.\n" };
       }
-      const pending = await bb.sdk.threads.interactions.list({ threadId });
-      const planInteraction = [...pending]
-        .reverse()
-        .find((interaction) => planFromInteraction(interaction) !== null);
-      let plan = planInteraction ? planFromInteraction(planInteraction) : null;
-      if (!plan) {
-        // Fall back to the latest plan-mode turn's final assistant text.
-        const [turn] = await bb.sdk.threads.events.list({
-          threadId,
-          order: "desc",
-          limit: "1",
-          types: ["client/turn/requested"],
-        });
-        if (turn && isPlanModeTurnRequest(turn.data)) {
-          const { output } = await bb.sdk.threads.output({ threadId });
-          plan = output && output.trim().length > 0 ? output : null;
-        }
-      }
+      const resolved = await resolvePlan(threadId);
+      const plan = resolved?.plan ?? null;
       const { fileName, split: configuredSplit } = await settings.get();
       const split = splitOverride ?? parseSplit(configuredSplit);
       if (!plan) {
