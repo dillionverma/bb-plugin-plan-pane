@@ -33,14 +33,18 @@ bb plugin install .
 
 ## Open it yourself
 
-| Surface | Panel (this window only) | Pane right | Pane below |
-| ------- | ------------------------ | ---------- | ---------- |
+| Surface | Plan in panel (this window) | New thread, pane right | New thread, pane below |
+| ------- | --------------------------- | ---------------------- | ---------------------- |
 | Thread header | **Plan** button (dot = plan exists) | split-right icon | split-below icon |
 | Keyboard | `Mod+Shift+L` | `Mod+D` | `Mod+Shift+D` |
 | Command palette | `Mod+K` → "Plan Pane: …" | same | same |
 
-The pane variants use bb's split open, which reaches every connected bb
-window. Shortcuts follow iTerm2/Ghostty and are configurable (blank disables).
+The split actions follow iTerm2/Ghostty: `Mod+D` puts a fresh new-thread
+composer beside the current thread, `Mod+Shift+D` below it. They drive bb's
+own split layout in this window only (bb never shows one thread in two panes,
+so a split always holds something new). They need bb's sidebar visible, since
+that is where bb exposes its split controls; the plugin tells you if it is
+hidden.
 
 bb binds `Mod+D` to the diff toggle out of the box, so move it once:
 
@@ -60,8 +64,8 @@ bb settings keyboard set panel.close mod+shift+w
 | `textPlans`| `true`  | Also open plans that arrive as plain text (no approval).       |
 | `split`    | `right` | Placement for split mode and the CLI: `right`, `down`, `left`, `top`, `replace`. |
 | `shortcut` | `mod+shift+l` | Chord: open in this thread's panel; blank disables.      |
-| `splitRightShortcut` | `mod+d` | Chord: open in a pane to the right.                  |
-| `splitDownShortcut` | `mod+shift+d` | Chord: open in a pane below.                     |
+| `splitRightShortcut` | `mod+d` | Chord: new thread in a pane to the right.            |
+| `splitDownShortcut` | `mod+shift+d` | Chord: new thread in a pane below.               |
 | `fileName` | `plan.md` | File name written inside thread storage.                     |
 
 ```sh

@@ -1,6 +1,12 @@
-// bb-plugin-plan-pane — frontend: a "Plan" button in the thread header, a
-// command-palette row, and a keyboard shortcut. All three open the thread's
-// plan.md in THIS window's panel only (no broadcast to other windows).
+// bb-plugin-plan-pane — frontend.
+//
+// Two jobs, both scoped to the window you are looking at:
+//   1. "Plan" button / Mod+Shift+L: open this thread's plan.md in the panel.
+//   2. Split buttons / Mod+D / Mod+Shift+D: open a NEW THREAD in a pane to the
+//      right or below, iTerm/Ghostty style. bb only exposes its split layout
+//      through the sidebar's "New thread" control (Mod-click = split right,
+//      drag to a pane edge = split on that side), so we drive those two paths
+//      with synthetic events.
 import { useCallback, useEffect, useRef, useState } from "react";
 import {
   definePluginApp,
@@ -12,19 +18,24 @@ import {
 import { toast } from "sonner";
 import type { PlanSource, rpcContract } from "./server";
 
-/** Window event used by the palette row and the shortcut to reach the mounted button. */
-const OPEN_EVENT = "plan-pane:open";
+const PLAN_CHANGED_CHANNEL = "plan-changed";
+/** Window event used by palette rows and shortcuts to reach the mounted header control. */
+const ACTION_EVENT = "plan-pane:action";
 
-type OpenMode = "panel" | "right" | "down";
+type Action = "plan" | "split-right" | "split-down";
 
 function threadIdFromLocation(): string | null {
   const match = /\/threads\/(thr_[a-z0-9]+)/i.exec(window.location.pathname);
   return match ? match[1] : null;
 }
 
-function requestOpen(threadId: string | null, mode: OpenMode = "panel") {
-  window.dispatchEvent(new CustomEvent(OPEN_EVENT, { detail: { threadId, mode } }));
+function requestAction(threadId: string | null, action: Action) {
+  window.dispatchEvent(new CustomEvent(ACTION_EVENT, { detail: { threadId, action } }));
 }
+
+// ---------------------------------------------------------------------------
+// Keyboard chords
+// ---------------------------------------------------------------------------
 
 interface Chord {
   mod: boolean;
@@ -34,6 +45,8 @@ interface Chord {
   meta: boolean;
   key: string;
 }
+
+const IS_MAC = /mac|iphone|ipad/i.test(navigator.platform);
 
 function parseChord(value: string): Chord | null {
   const parts = value.trim().toLowerCase().split("+").filter(Boolean);
@@ -51,8 +64,7 @@ function parseChord(value: string): Chord | null {
 }
 
 function matchesChord(event: KeyboardEvent, chord: Chord): boolean {
-  const isMac = /mac|iphone|ipad/i.test(navigator.platform);
-  const modPressed = isMac ? event.metaKey : event.ctrlKey;
+  const modPressed = IS_MAC ? event.metaKey : event.ctrlKey;
   if (chord.mod && !modPressed) return false;
   if (chord.ctrl && !event.ctrlKey) return false;
   if (chord.meta && !event.metaKey) return false;
@@ -65,16 +77,95 @@ function matchesChord(event: KeyboardEvent, chord: Chord): boolean {
 function formatChord(value: string): string {
   const chord = parseChord(value);
   if (!chord) return "";
-  const isMac = /mac|iphone|ipad/i.test(navigator.platform);
   const parts: string[] = [];
-  if (chord.ctrl) parts.push(isMac ? "⌃" : "Ctrl");
-  if (chord.alt) parts.push(isMac ? "⌥" : "Alt");
-  if (chord.shift) parts.push(isMac ? "⇧" : "Shift");
-  if (chord.mod) parts.push(isMac ? "⌘" : "Ctrl");
-  if (chord.meta) parts.push(isMac ? "⌘" : "Win");
+  if (chord.ctrl) parts.push(IS_MAC ? "⌃" : "Ctrl");
+  if (chord.alt) parts.push(IS_MAC ? "⌥" : "Alt");
+  if (chord.shift) parts.push(IS_MAC ? "⇧" : "Shift");
+  if (chord.mod) parts.push(IS_MAC ? "⌘" : "Ctrl");
+  if (chord.meta) parts.push(IS_MAC ? "⌘" : "Win");
   parts.push(chord.key.length === 1 ? chord.key.toUpperCase() : chord.key);
-  return isMac ? parts.join("") : parts.join("+");
+  return IS_MAC ? parts.join("") : parts.join("+");
 }
+
+// ---------------------------------------------------------------------------
+// Driving bb's split layout through the sidebar "New thread" control
+// ---------------------------------------------------------------------------
+
+function findNewThreadButton(): HTMLButtonElement | null {
+  const candidates = Array.from(document.querySelectorAll<HTMLButtonElement>('button[aria-label^="New thread"]'));
+  // Prefer the sidebar copy (it carries the split handlers); skip plugin toolbars.
+  return (
+    candidates.find((button) => button.closest('[data-sidebar="sidebar"], [data-sidebar="content"]') !== null) ??
+    candidates[0] ??
+    null
+  );
+}
+
+function pointerInit(x: number, y: number): PointerEventInit {
+  return {
+    bubbles: true,
+    cancelable: true,
+    composed: true,
+    button: 0,
+    buttons: 1,
+    clientX: x,
+    clientY: y,
+    screenX: x,
+    screenY: y,
+    pointerId: 1,
+    pointerType: "mouse",
+    isPrimary: true,
+  };
+}
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+
+/** Mod-click the sidebar "New thread" button: bb opens the composer in a pane to the right. */
+function splitNewThreadRight(): boolean {
+  const button = findNewThreadButton();
+  if (!button) return false;
+  button.dispatchEvent(
+    new MouseEvent("click", { bubbles: true, cancelable: true, composed: true, metaKey: IS_MAC, ctrlKey: !IS_MAC }),
+  );
+  return true;
+}
+
+/**
+ * Replay bb's drag-to-split gesture: pointerdown on "New thread", move into the
+ * target pane's bottom zone, release. bb's drag manager listens on window and
+ * resolves the pane with elementsFromPoint, so synthetic events suffice.
+ */
+async function splitNewThreadBelow(anchor: HTMLElement | null): Promise<boolean> {
+  const button = findNewThreadButton();
+  if (!button) return false;
+  const pane =
+    anchor?.closest<HTMLElement>("[data-split-pane-id]") ??
+    document.querySelector<HTMLElement>("[data-split-pane-id]") ??
+    document.querySelector<HTMLElement>("main");
+  if (!pane) return false;
+
+  const source = button.getBoundingClientRect();
+  const target = pane.getBoundingClientRect();
+  const startX = source.left + source.width / 2;
+  const startY = source.top + source.height / 2;
+  const midX = target.left + target.width / 2;
+  // Bottom zone is the lower 30% of the pane; stay clear of left/right zones (outer 28%).
+  const dropY = target.top + target.height * 0.9;
+
+  button.dispatchEvent(new PointerEvent("pointerdown", pointerInit(startX, startY)));
+  await nextFrame();
+  // First move is horizontal so the gesture engages (bb requires |dx| > |dy| past the sidebar edge).
+  window.dispatchEvent(new PointerEvent("pointermove", pointerInit(midX, startY)));
+  await nextFrame();
+  window.dispatchEvent(new PointerEvent("pointermove", pointerInit(midX, dropY)));
+  await nextFrame();
+  window.dispatchEvent(new PointerEvent("pointerup", pointerInit(midX, dropY)));
+  return true;
+}
+
+// ---------------------------------------------------------------------------
+// Icons and header control
+// ---------------------------------------------------------------------------
 
 const SVG_PROPS = {
   viewBox: "0 0 24 24",
@@ -119,9 +210,10 @@ function SplitDownIcon({ className }: { className?: string }) {
 const BUTTON_CLASS =
   "inline-flex h-7 items-center gap-1.5 rounded-md px-2 text-sm transition-colors hover:bg-accent hover:text-accent-foreground disabled:opacity-60";
 
-function PlanButton({ threadId }: PluginThreadHeaderActionProps) {
+function HeaderControls({ threadId }: PluginThreadHeaderActionProps) {
   const rpc = useRpc<typeof rpcContract>();
   const nav = useBbNavigate();
+  const rootRef = useRef<HTMLDivElement>(null);
   const [source, setSource] = useState<PlanSource>(null);
   const [shortcuts, setShortcuts] = useState({ panel: "", splitRight: "", splitDown: "" });
   const [busy, setBusy] = useState(false);
@@ -148,29 +240,23 @@ function PlanButton({ threadId }: PluginThreadHeaderActionProps) {
     if (changed === threadId) refresh();
   });
 
-  const open = useCallback(
-    async (mode: OpenMode = "panel") => {
+  const run = useCallback(
+    async (action: Action) => {
       if (busyRef.current) return;
       busyRef.current = true;
       setBusy(true);
       try {
-        if (mode === "panel") {
-          const result = await rpc.call("plan_prepare", { threadId });
-          setSource(result.source);
-          if (!result.source) {
-            toast.message("No plan for this thread yet", {
-              description: "Start a turn with /plan, or wait for the agent to propose one.",
-            });
-            return;
-          }
-          const accepted = nav.experimental_openFilePreview({
-            target: { kind: "thread-storage", threadId, path: result.fileName },
-            location: null,
-          });
-          if (!accepted) toast.error("Could not open the plan in this view");
+        if (action === "split-right") {
+          if (!splitNewThreadRight()) toast.error("Open the sidebar first (⌘\\) so bb can create the split");
           return;
         }
-        const result = await rpc.call("plan_split", { threadId, split: mode });
+        if (action === "split-down") {
+          if (!(await splitNewThreadBelow(rootRef.current))) {
+            toast.error("Open the sidebar first (⌘\\) so bb can create the split");
+          }
+          return;
+        }
+        const result = await rpc.call("plan_prepare", { threadId });
         setSource(result.source);
         if (!result.source) {
           toast.message("No plan for this thread yet", {
@@ -178,7 +264,11 @@ function PlanButton({ threadId }: PluginThreadHeaderActionProps) {
           });
           return;
         }
-        if (result.delivered === 0) toast.error("No bb window accepted the split");
+        const accepted = nav.experimental_openFilePreview({
+          target: { kind: "thread-storage", threadId, path: result.fileName },
+          location: null,
+        });
+        if (!accepted) toast.error("Could not open the plan in this view");
       } catch (error) {
         toast.error(error instanceof Error ? error.message : String(error));
       } finally {
@@ -189,28 +279,29 @@ function PlanButton({ threadId }: PluginThreadHeaderActionProps) {
     [nav, rpc, threadId],
   );
 
-  // Palette row and shortcut both arrive here; act only for our thread.
+  // Palette rows and shortcuts arrive here; act only for the thread in view.
   useEffect(() => {
-    const onOpen = (event: Event) => {
-      const detail = (event as CustomEvent<{ threadId: string | null; mode?: OpenMode }>).detail;
-      const requested = detail?.threadId ?? null;
+    const onAction = (event: Event) => {
+      const detail = (event as CustomEvent<{ threadId: string | null; action: Action }>).detail;
+      if (!detail) return;
+      const requested = detail.threadId ?? null;
       if (requested === threadId || (requested === null && threadIdFromLocation() === threadId)) {
-        void open(detail?.mode ?? "panel");
+        void run(detail.action);
       }
     };
-    window.addEventListener(OPEN_EVENT, onOpen);
-    return () => window.removeEventListener(OPEN_EVENT, onOpen);
-  }, [open, threadId]);
+    window.addEventListener(ACTION_EVENT, onAction);
+    return () => window.removeEventListener(ACTION_EVENT, onAction);
+  }, [run, threadId]);
 
   useEffect(() => {
-    const bindings: Array<{ chord: Chord; mode: OpenMode }> = [];
-    for (const [value, mode] of [
-      [shortcuts.panel, "panel"],
-      [shortcuts.splitRight, "right"],
-      [shortcuts.splitDown, "down"],
+    const bindings: Array<{ chord: Chord; action: Action }> = [];
+    for (const [value, action] of [
+      [shortcuts.panel, "plan"],
+      [shortcuts.splitRight, "split-right"],
+      [shortcuts.splitDown, "split-down"],
     ] as const) {
       const chord = parseChord(value);
-      if (chord) bindings.push({ chord, mode });
+      if (chord) bindings.push({ chord, action });
     }
     if (bindings.length === 0) return;
     const onKeyDown = (event: KeyboardEvent) => {
@@ -218,36 +309,38 @@ function PlanButton({ threadId }: PluginThreadHeaderActionProps) {
       if (threadIdFromLocation() !== threadId) return;
       // Most specific first so mod+shift+d is not swallowed by mod+d.
       const hit = [...bindings]
-        .sort((a, b) => Number(b.chord.shift) + Number(b.chord.alt) - (Number(a.chord.shift) + Number(a.chord.alt)))
+        .sort(
+          (a, b) =>
+            Number(b.chord.shift) + Number(b.chord.alt) - (Number(a.chord.shift) + Number(a.chord.alt)),
+        )
         .find(({ chord }) => matchesChord(event, chord));
       if (!hit) return;
       event.preventDefault();
       event.stopPropagation();
-      void open(hit.mode);
+      void run(hit.action);
     };
     // Capture phase so the chord wins over bb's own document handlers.
     document.addEventListener("keydown", onKeyDown, true);
     return () => document.removeEventListener("keydown", onKeyDown, true);
-  }, [open, shortcuts, threadId]);
+  }, [run, shortcuts, threadId]);
 
   const withHint = (label: string, value: string) => {
     const hint = formatChord(value);
     return hint ? `${label} (${hint})` : label;
   };
-  const panelTitle = withHint(source ? "Open plan in panel" : "No plan yet", shortcuts.panel);
-  const rightTitle = withHint("Open plan in a pane to the right", shortcuts.splitRight);
-  const downTitle = withHint("Open plan in a pane below", shortcuts.splitDown);
-  const tone = source ? "text-foreground" : "text-muted-foreground";
+  const planTitle = withHint(source ? "Open plan in panel" : "No plan yet", shortcuts.panel);
+  const rightTitle = withHint("New thread in a pane to the right", shortcuts.splitRight);
+  const downTitle = withHint("New thread in a pane below", shortcuts.splitDown);
 
   return (
-    <div className="flex items-center" data-plan-source={source ?? "none"}>
+    <div ref={rootRef} className="flex items-center" data-plan-source={source ?? "none"}>
       <button
         type="button"
-        onClick={() => void open("panel")}
+        onClick={() => void run("plan")}
         disabled={busy}
-        aria-label={panelTitle}
-        title={panelTitle}
-        className={`${BUTTON_CLASS} ${tone}`}
+        aria-label={planTitle}
+        title={planTitle}
+        className={`${BUTTON_CLASS} ${source ? "text-foreground" : "text-muted-foreground"}`}
       >
         <PlanIcon className="size-4" />
         <span className="hidden md:inline">Plan</span>
@@ -255,21 +348,21 @@ function PlanButton({ threadId }: PluginThreadHeaderActionProps) {
       </button>
       <button
         type="button"
-        onClick={() => void open("right")}
+        onClick={() => void run("split-right")}
         disabled={busy}
         aria-label={rightTitle}
         title={rightTitle}
-        className={`${BUTTON_CLASS} ${tone} px-1.5`}
+        className={`${BUTTON_CLASS} px-1.5 text-muted-foreground`}
       >
         <SplitRightIcon className="size-4" />
       </button>
       <button
         type="button"
-        onClick={() => void open("down")}
+        onClick={() => void run("split-down")}
         disabled={busy}
         aria-label={downTitle}
         title={downTitle}
-        className={`${BUTTON_CLASS} ${tone} px-1.5`}
+        className={`${BUTTON_CLASS} px-1.5 text-muted-foreground`}
       >
         <SplitDownIcon className="size-4" />
       </button>
@@ -277,31 +370,29 @@ function PlanButton({ threadId }: PluginThreadHeaderActionProps) {
   );
 }
 
-const PLAN_CHANGED_CHANNEL = "plan-changed";
-
 export default definePluginApp((app) => {
   app.slots.experimental_threadHeaderAction({
     id: "plan",
-    title: "Plan",
-    component: PlanButton,
+    title: "Plan Pane",
+    component: HeaderControls,
   });
 
   app.slots.commandPaletteAction({
     id: "open-plan",
     title: "Plan Pane: open plan in this thread's panel",
     isAvailable: ({ threadId }) => threadId !== null,
-    run: ({ threadId }) => requestOpen(threadId, "panel"),
+    run: ({ threadId }) => requestAction(threadId, "plan"),
   });
   app.slots.commandPaletteAction({
-    id: "open-plan-right",
-    title: "Plan Pane: open plan in a pane to the right",
+    id: "split-right",
+    title: "Plan Pane: new thread in a pane to the right",
     isAvailable: ({ threadId }) => threadId !== null,
-    run: ({ threadId }) => requestOpen(threadId, "right"),
+    run: ({ threadId }) => requestAction(threadId, "split-right"),
   });
   app.slots.commandPaletteAction({
-    id: "open-plan-down",
-    title: "Plan Pane: open plan in a pane below",
+    id: "split-down",
+    title: "Plan Pane: new thread in a pane below",
     isAvailable: ({ threadId }) => threadId !== null,
-    run: ({ threadId }) => requestOpen(threadId, "down"),
+    run: ({ threadId }) => requestAction(threadId, "split-down"),
   });
 });

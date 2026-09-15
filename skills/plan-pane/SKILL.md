@@ -16,27 +16,23 @@ Two signals are covered:
 - A `/plan` turn that ends with a plain message and no approval (Codex today).
   The pane opens when that turn goes idle, using the final assistant message.
 
-## Opening a plan on demand (current window only)
+## Header controls, palette rows, and shortcuts (current window only)
 
-- **Header buttons**: "Plan" plus two split icons sit in the thread header
-  action row. A dot on "Plan" means a plan exists (pending approval, recent
-  `/plan` turn, or a saved `plan.md`).
-  - "Plan" opens `plan.md` in this window's panel only.
-  - Split-right and split-below open it in a new pane. These use bb's split
-    open, which reaches every connected bb window.
-- **Command palette**: `Mod+K`, then "Plan Pane: …" (panel, pane right, pane
-  below).
-- **Keyboard shortcuts** (iTerm/Ghostty style, while viewing a thread):
-  - `Mod+D` pane to the right (`splitRightShortcut`)
-  - `Mod+Shift+D` pane below (`splitDownShortcut`)
-  - `Mod+Shift+L` this thread's panel (`shortcut`)
-  Blank a setting to disable it. bb's own shortcut table is fixed, so these
-  bindings are plugin-owned and do not appear under Settings → Keyboard.
-  Because bb binds `Mod+D` to the diff toggle by default, move that first:
-  `bb settings keyboard set diff.toggle mod+shift+g`. To make `Mod+W` close
-  the active pane instead of a panel tab:
-  `bb settings keyboard set pane.close mod+w` and
-  `bb settings keyboard set panel.close mod+shift+w`.
+- **Plan** button, `Mod+Shift+L`, palette "Plan Pane: open plan in this
+  thread's panel": opens `plan.md` in the panel. A dot on the button means a
+  plan exists (pending approval, recent `/plan` turn, or saved `plan.md`).
+- **Split-right** icon, `Mod+D`, palette "…new thread in a pane to the
+  right": opens a fresh new-thread composer beside the current thread.
+- **Split-below** icon, `Mod+Shift+D`, palette "…new thread in a pane below":
+  same, stacked under the current thread.
+
+Splits reuse bb's sidebar "New thread" split controls, so bb's sidebar must be
+visible (`Mod+\`). bb binds `Mod+D` to the diff toggle by default; move it
+with `bb settings keyboard set diff.toggle mod+shift+g`. For `Mod+W` to close
+the active pane: `bb settings keyboard set pane.close mod+w` and
+`bb settings keyboard set panel.close mod+shift+w`. Chords are plugin-owned
+settings (`shortcut`, `splitRightShortcut`, `splitDownShortcut`); blank one
+to disable it.
 
 ## Commands
 

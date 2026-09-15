@@ -31,11 +31,6 @@ export const rpcContract = defineRpcContract({
       shortcuts: z.object({ panel: z.string(), splitRight: z.string(), splitDown: z.string() }),
     }),
   },
-  /** Resolve the plan, write plan.md, and open it in a new pane (bb's split open, every window). */
-  plan_split: {
-    input: z.object({ threadId: z.string().min(1), split: z.enum(SPLIT_OPTIONS) }),
-    output: z.object({ source: planSourceSchema, fileName: z.string(), delivered: z.number() }),
-  },
   /** Resolve the plan, write plan.md into thread storage, and return where it is. */
   plan_prepare: {
     input: z.object({ threadId: z.string().min(1) }),
@@ -130,7 +125,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
     splitRightShortcut: {
       type: "string",
-      label: "Shortcut: open plan in a pane to the right (iTerm/Ghostty style; blank disables)",
+      label: "Shortcut: new thread in a pane to the right (iTerm/Ghostty style; blank disables)",
       experimental_schema: z
         .string()
         .trim()
@@ -140,7 +135,7 @@ export default async function plugin(bb: BbPluginApi) {
     },
     splitDownShortcut: {
       type: "string",
-      label: "Shortcut: open plan in a pane below (blank disables)",
+      label: "Shortcut: new thread in a pane below (blank disables)",
       experimental_schema: z
         .string()
         .trim()
@@ -301,20 +296,6 @@ export default async function plugin(bb: BbPluginApi) {
       if (resolved) return { source: resolved.source, fileName, shortcuts };
       const source: PlanSource = (await savedPlanExists(threadId, fileName)) ? "saved" : null;
       return { source, fileName, shortcuts };
-    },
-    async plan_split({ threadId, split }) {
-      const { fileName } = await settings.get();
-      const resolved = await resolvePlan(threadId);
-      let source: PlanSource = null;
-      if (resolved) {
-        await writePlanFile(threadId, resolved.plan, fileName);
-        source = resolved.source;
-      } else if (await savedPlanExists(threadId, fileName)) {
-        source = "saved";
-      }
-      if (!source) return { source, fileName, delivered: 0 };
-      const delivered = await openSplit(threadId, fileName, split);
-      return { source, fileName, delivered };
     },
     async plan_prepare({ threadId }) {
       const { fileName } = await settings.get();
