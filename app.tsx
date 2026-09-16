@@ -118,7 +118,47 @@ function pointerInit(x: number, y: number): PointerEventInit {
   };
 }
 
-const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+const settle = (ms = 30) =>
+  new Promise<void>((resolve) => {
+    requestAnimationFrame(() => window.setTimeout(resolve, ms));
+  });
+
+// bb persists its split layout under this key (session storage first, then
+// local storage). Read-only here: writes would not notify bb's store.
+const LAYOUT_KEY = "bb.splitLayout";
+
+interface LayoutNode {
+  type: "pane" | "split";
+  content?: { kind: string };
+  children?: LayoutNode[];
+}
+
+function readLayout(): { raw: string | null; hasNewThreadPane: boolean; paneCount: number } {
+  let raw: string | null = null;
+  try {
+    raw = window.sessionStorage.getItem(LAYOUT_KEY) ?? window.localStorage.getItem(LAYOUT_KEY);
+  } catch {
+    raw = null;
+  }
+  let hasNewThreadPane = false;
+  let paneCount = 0;
+  const walk = (node: LayoutNode | undefined) => {
+    if (!node) return;
+    if (node.type === "pane") {
+      paneCount += 1;
+      if (node.content?.kind === "new-thread") hasNewThreadPane = true;
+      return;
+    }
+    for (const child of node.children ?? []) walk(child);
+  };
+  try {
+    const parsed = raw ? (JSON.parse(raw) as { layout?: { root?: LayoutNode } }) : null;
+    walk(parsed?.layout?.root);
+  } catch {
+    // ignore malformed storage
+  }
+  return { raw, hasNewThreadPane, paneCount };
+}
 
 /** Mod-click the sidebar "New thread" button: bb opens the composer in a pane to the right. */
 function splitNewThreadRight(): boolean {
@@ -135,14 +175,21 @@ function splitNewThreadRight(): boolean {
  * target pane's bottom zone, release. bb's drag manager listens on window and
  * resolves the pane with elementsFromPoint, so synthetic events suffice.
  */
-async function splitNewThreadBelow(anchor: HTMLElement | null): Promise<boolean> {
+type SplitBelowResult =
+  | { ok: true }
+  | { ok: false; reason: "no-button" | "no-pane" | "already-open" | "no-change"; detail?: string };
+
+async function splitNewThreadBelow(anchor: HTMLElement | null): Promise<SplitBelowResult> {
   const button = findNewThreadButton();
-  if (!button) return false;
+  if (!button) return { ok: false, reason: "no-button" };
+  const before = readLayout();
+  if (before.hasNewThreadPane) return { ok: false, reason: "already-open" };
+
   const pane =
     anchor?.closest<HTMLElement>("[data-split-pane-id]") ??
     document.querySelector<HTMLElement>("[data-split-pane-id]") ??
     document.querySelector<HTMLElement>("main");
-  if (!pane) return false;
+  if (!pane) return { ok: false, reason: "no-pane" };
 
   const source = button.getBoundingClientRect();
   const target = pane.getBoundingClientRect();
@@ -152,15 +199,23 @@ async function splitNewThreadBelow(anchor: HTMLElement | null): Promise<boolean>
   // Bottom zone is the lower 30% of the pane; stay clear of left/right zones (outer 28%).
   const dropY = target.top + target.height * 0.9;
 
+  const diagnostics: string[] = [];
   button.dispatchEvent(new PointerEvent("pointerdown", pointerInit(startX, startY)));
-  await nextFrame();
+  await settle();
   // First move is horizontal so the gesture engages (bb requires |dx| > |dy| past the sidebar edge).
-  window.dispatchEvent(new PointerEvent("pointermove", pointerInit(midX, startY)));
-  await nextFrame();
-  window.dispatchEvent(new PointerEvent("pointermove", pointerInit(midX, dropY)));
-  await nextFrame();
-  window.dispatchEvent(new PointerEvent("pointerup", pointerInit(midX, dropY)));
-  return true;
+  document.dispatchEvent(new PointerEvent("pointermove", pointerInit(midX, startY)));
+  await settle();
+  diagnostics.push(document.querySelector("[data-split-drag-label]") ? "engaged" : "not engaged");
+  document.dispatchEvent(new PointerEvent("pointermove", pointerInit(midX, dropY)));
+  await settle();
+  const label = document.querySelector("[data-split-drag-label]")?.textContent?.trim();
+  diagnostics.push(label ? `zone: ${label}` : "no drop zone");
+  document.dispatchEvent(new PointerEvent("pointerup", pointerInit(midX, dropY)));
+  await settle(120);
+
+  const after = readLayout();
+  if (after.raw !== before.raw && after.paneCount > before.paneCount) return { ok: true };
+  return { ok: false, reason: "no-change", detail: diagnostics.join(", ") };
 }
 
 // ---------------------------------------------------------------------------
@@ -251,8 +306,19 @@ function HeaderControls({ threadId }: PluginThreadHeaderActionProps) {
           return;
         }
         if (action === "split-down") {
-          if (!(await splitNewThreadBelow(rootRef.current))) {
+          const result = await splitNewThreadBelow(rootRef.current);
+          if (result.ok) return;
+          if (result.reason === "no-button") {
             toast.error("Open the sidebar first (⌘\\) so bb can create the split");
+          } else if (result.reason === "already-open") {
+            toast.message("bb already has a new-thread pane open", {
+              description: "bb allows one at a time. Use it, or close it with ⌘W, then try again.",
+            });
+            splitNewThreadRight(); // focuses the existing new-thread pane
+          } else if (result.reason === "no-pane") {
+            toast.error("Could not find the current pane to split");
+          } else {
+            toast.error(`Split below did not take (${result.detail ?? "unknown"})`);
           }
           return;
         }
