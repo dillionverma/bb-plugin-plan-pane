@@ -199,20 +199,21 @@ async function splitNewThreadBelow(anchor: HTMLElement | null): Promise<SplitBel
   // Bottom zone is the lower 30% of the pane; stay clear of left/right zones (outer 28%).
   const dropY = target.top + target.height * 0.9;
 
+  // bb's drag manager handles pointerdown/move/up synchronously, so the whole
+  // gesture runs inside one task: its ghost chip and drop-zone overlay are
+  // appended and removed before the browser ever paints a frame.
   const diagnostics: string[] = [];
   button.dispatchEvent(new PointerEvent("pointerdown", pointerInit(startX, startY)));
-  await settle();
   // First move is horizontal so the gesture engages (bb requires |dx| > |dy| past the sidebar edge).
   document.dispatchEvent(new PointerEvent("pointermove", pointerInit(midX, startY)));
-  await settle();
   diagnostics.push(document.querySelector("[data-split-drag-label]") ? "engaged" : "not engaged");
   document.dispatchEvent(new PointerEvent("pointermove", pointerInit(midX, dropY)));
-  await settle();
   const label = document.querySelector("[data-split-drag-label]")?.textContent?.trim();
   diagnostics.push(label ? `zone: ${label}` : "no drop zone");
   document.dispatchEvent(new PointerEvent("pointerup", pointerInit(midX, dropY)));
-  await settle(120);
 
+  // Only the verification waits; the gesture itself is already over.
+  await settle(60);
   const after = readLayout();
   if (after.raw !== before.raw && after.paneCount > before.paneCount) return { ok: true };
   return { ok: false, reason: "no-change", detail: diagnostics.join(", ") };
