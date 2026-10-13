@@ -22,11 +22,11 @@
     "branding": {
       "icon": "ListTodo"
     },
-    "server": "./server.ts",
+    "server": "./src/server.ts",
     "skills": [
       "skills"
     ],
-    "app": "./app.tsx"
+    "app": "./src/app.tsx"
   },
   "dependencies": {
     "zod": "^4.3.6"

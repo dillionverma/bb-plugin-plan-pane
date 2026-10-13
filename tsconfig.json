@@ -16,12 +16,11 @@
     "jsx": "react-jsx",
     "paths": {
       "@/*": [
-        "./*"
+        "./src/*"
       ]
     }
   },
   "include": [
-    "server.ts",
-    "app.tsx"
+    "src/**/*"
   ]
 }
