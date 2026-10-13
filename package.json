@@ -1,6 +1,6 @@
 {
   "name": "bb-plugin-plan-pane",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "description": "Open an agent's proposed plan in a split pane the moment it is ready for review.",
   "type": "module",
   "license": "MIT",
